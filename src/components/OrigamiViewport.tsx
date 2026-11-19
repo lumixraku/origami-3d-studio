@@ -162,7 +162,7 @@ export const OrigamiViewport: React.FC<OrigamiViewportProps> = ({
     container.appendChild(renderer.domElement);
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color('#0f172a');
+    scene.background = new THREE.Color('#ede7da');
 
     const camera = new THREE.PerspectiveCamera(40, initW / initH, 0.22, 24);
     camera.position.set(...CAMERA_PRESETS.iso.pos);
@@ -176,11 +176,11 @@ export const OrigamiViewport: React.FC<OrigamiViewportProps> = ({
     controls.maxDistance = 9.0;
     controls.target.set(...CAMERA_PRESETS.iso.target);
 
-    // Three-point studio lighting for crisp paper facet definition
-    const hemiLight = new THREE.HemisphereLight('#f8fafc', '#334155', 0.92);
+    // Warm gallery studio lighting for delicate Washi paper fold definition
+    const hemiLight = new THREE.HemisphereLight('#fffdf8', '#d6cebf', 1.05);
     scene.add(hemiLight);
 
-    const keyLight = new THREE.DirectionalLight('#ffffff', 1.18);
+    const keyLight = new THREE.DirectionalLight('#fffaf0', 1.15);
     keyLight.position.set(-3.2, 5.8, -3.2);
     keyLight.castShadow = true;
     keyLight.shadow.mapSize.width = 1024;
@@ -190,22 +190,34 @@ export const OrigamiViewport: React.FC<OrigamiViewportProps> = ({
     keyLight.shadow.bias = -0.0004;
     scene.add(keyLight);
 
-    const fillLight = new THREE.DirectionalLight('#bae6fd', 0.52);
+    const fillLight = new THREE.DirectionalLight('#e8eef5', 0.48);
     fillLight.position.set(4.0, 2.8, 3.6);
     scene.add(fillLight);
 
-    const underLight = new THREE.DirectionalLight('#fde68a', 0.32);
+    const underLight = new THREE.DirectionalLight('#f5e6d3', 0.36);
     underLight.position.set(0, -3.5, 0);
     scene.add(underLight);
 
-    // Studio Grid & Soft Contact Shadow Floor
-    const grid = new THREE.GridHelper(10, 20, '#334155', '#1e293b');
-    grid.position.y = -0.52;
-    scene.add(grid);
+    // Minimalist Gallery Pedestal Rings & Soft Contact Shadow Floor
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: '#cfc5b2',
+      transparent: true,
+      opacity: 0.45,
+      side: THREE.DoubleSide,
+    });
+    const outerRing = new THREE.Mesh(new THREE.RingGeometry(1.78, 1.795, 96), ringMat);
+    outerRing.rotation.x = -Math.PI / 2;
+    outerRing.position.y = -0.52;
+    scene.add(outerRing);
+
+    const innerRing = new THREE.Mesh(new THREE.RingGeometry(1.12, 1.13, 72), ringMat);
+    innerRing.rotation.x = -Math.PI / 2;
+    innerRing.position.y = -0.52;
+    scene.add(innerRing);
 
     const shadowFloor = new THREE.Mesh(
       new THREE.PlaneGeometry(12, 12),
-      new THREE.ShadowMaterial({ opacity: 0.28 }),
+      new THREE.ShadowMaterial({ opacity: 0.14 }),
     );
     shadowFloor.rotation.x = -Math.PI / 2;
     shadowFloor.position.y = -0.519;
@@ -278,9 +290,9 @@ export const OrigamiViewport: React.FC<OrigamiViewportProps> = ({
     const edgeGeometry = new THREE.BufferGeometry();
     edgeGeometry.setAttribute('position', new THREE.BufferAttribute(edgePositions, 3));
     const edgeMaterial = new THREE.LineBasicMaterial({
-      color: '#1e293b',
+      color: '#3a352e',
       transparent: true,
-      opacity: 0.26,
+      opacity: 0.16,
     });
     const edgeLines = new THREE.LineSegments(edgeGeometry, edgeMaterial);
     scene.add(edgeLines);
@@ -413,7 +425,7 @@ export const OrigamiViewport: React.FC<OrigamiViewportProps> = ({
         const pB = new THREE.Vector3(...vertexPositions[crease.vB]);
         if (pA.distanceTo(pB) < 1e-4) continue;
 
-        const color = crease.foldType === 'valley' ? '#22d3ee' : '#fb923c';
+        const color = crease.foldType === 'valley' ? '#2b6cb0' : '#c85a32';
         const lineGeo = new THREE.BufferGeometry().setFromPoints([pA, pB]);
         const lineMat = new THREE.LineDashedMaterial({
           color,
@@ -421,7 +433,7 @@ export const OrigamiViewport: React.FC<OrigamiViewportProps> = ({
           gapSize: 0.045,
           depthTest: false,
           transparent: true,
-          opacity: 0.92,
+          opacity: 0.9,
         });
         const line = new THREE.Line(lineGeo, lineMat);
         line.computeLineDistances();
@@ -444,9 +456,9 @@ export const OrigamiViewport: React.FC<OrigamiViewportProps> = ({
           const pts = curve.getPoints(20);
           const arcGeo = new THREE.BufferGeometry().setFromPoints(pts);
           const arcMat = new THREE.LineBasicMaterial({
-            color: '#38bdf8',
+            color: '#2b6cb0',
             transparent: true,
-            opacity: 0.8,
+            opacity: 0.78,
             depthTest: false,
           });
           const arcLine = new THREE.Line(arcGeo, arcMat);
@@ -457,9 +469,9 @@ export const OrigamiViewport: React.FC<OrigamiViewportProps> = ({
           const tangent = curve.getTangent(0.96).normalize();
           const coneGeo = new THREE.ConeGeometry(0.036, 0.095, 12);
           const coneMat = new THREE.MeshBasicMaterial({
-            color: '#38bdf8',
+            color: '#2b6cb0',
             transparent: true,
-            opacity: 0.9,
+            opacity: 0.88,
             depthTest: false,
           });
           const cone = new THREE.Mesh(coneGeo, coneMat);
@@ -488,7 +500,7 @@ export const OrigamiViewport: React.FC<OrigamiViewportProps> = ({
       backMat.transparent = isXray;
       backMat.opacity = isXray ? 0.5 : 1.0;
       backMat.depthWrite = !isXray;
-      edgeMaterial.opacity = isXray ? 0.55 : 0.24;
+      edgeMaterial.opacity = isXray ? 0.42 : 0.16;
 
       if (Math.abs(currProg - lastProgress) > 1e-5 || creasesOn !== lastShowCreases) {
         lastProgress = currProg;
@@ -515,7 +527,7 @@ export const OrigamiViewport: React.FC<OrigamiViewportProps> = ({
       // 1. Main Viewport
       renderer.setViewport(0, 0, w, h);
       renderer.setScissor(0, 0, w, h);
-      renderer.setClearColor('#0f172a', 1);
+      renderer.setClearColor('#ede7da', 1);
       renderer.clear();
       renderer.render(scene, camera);
 
@@ -539,7 +551,7 @@ export const OrigamiViewport: React.FC<OrigamiViewportProps> = ({
 
         renderer.setViewport(pipX, pipY, pipW, pipH);
         renderer.setScissor(pipX, pipY, pipW, pipH);
-        renderer.setClearColor('#162033', 1);
+        renderer.setClearColor('#e3dccb', 1);
         renderer.clear();
         renderer.render(scene, pipCamera);
       }

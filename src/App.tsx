@@ -27,11 +27,11 @@ const CAMERA_OPTIONS: Array<{ id: CameraPresetId; label: string }> = [
 ];
 
 const PAPER_COLORS = [
-  { name: '朱红晕染和纸', hex: '#e0533c' },
-  { name: '群青琉璃', hex: '#3b82f6' },
-  { name: '千岁抹茶', hex: '#2f9e66' },
-  { name: '山吹金黄', hex: '#d99b16' },
-  { name: '樱花浅粉', hex: '#ec7393' },
+  { name: '朱赤晕染和纸', hex: '#d4543b' },
+  { name: '琉璃群青', hex: '#3b6291' },
+  { name: '若竹抹茶', hex: '#558262' },
+  { name: '山吹金茶', hex: '#c98a2c' },
+  { name: '薄樱浅粉', hex: '#d98294' },
 ];
 
 interface CreasePatternMiniMapProps {
@@ -56,8 +56,8 @@ function CreasePatternMiniMap({ model, activeStepIndex }: CreasePatternMiniMapPr
   return (
     <div className="cp-card">
       <div className="cp-header">
-        <span>2D 折痕展开图对照</span>
-        <span className="cp-sub">实线已折 · 亮色当前步</span>
+        <span>展开图 · 折痕对照</span>
+        <span className="cp-sub">实线已折 · 虚线当前步</span>
       </div>
       <svg className="cp-svg" viewBox={`${vbX} ${vbY} ${vbW} ${vbH}`}>
         <rect
@@ -66,8 +66,8 @@ function CreasePatternMiniMap({ model, activeStepIndex }: CreasePatternMiniMapPr
           width={model.paperWidth}
           height={model.paperLength}
           rx={0.03}
-          fill="#1e293b"
-          stroke="#64748b"
+          fill="#fdfbf7"
+          stroke="#b8afa0"
           strokeWidth={0.025}
         />
         {model.creases.map((c) => {
@@ -78,11 +78,11 @@ function CreasePatternMiniMap({ model, activeStepIndex }: CreasePatternMiniMapPr
           const stroke =
             c.foldType === 'valley'
               ? isActive
-                ? '#22d3ee'
-                : '#38bdf8'
+                ? '#2b6cb0'
+                : '#4a7fa8'
               : isActive
-                ? '#fb923c'
-                : '#f97316';
+                ? '#c85a32'
+                : '#cf7451';
           return (
             <line
               key={c.id}
@@ -233,11 +233,11 @@ export function App() {
       {/* Header */}
       <header className="top-bar">
         <div className="brand-group">
-          <div className="brand-badge">折り</div>
+          <div className="brand-badge" aria-hidden="true">折り</div>
           <div>
-            <h1 className="brand-title">Origami 3D 刚性折纸演示台</h1>
+            <h1 className="brand-title">和紙折紙 · Origami Atelier</h1>
             <p className="brand-subtitle">
-              {currentModel.name} · 360° 自由拆解教学
+              {currentModel.name} · 立体逐帧拆解
             </p>
           </div>
 
