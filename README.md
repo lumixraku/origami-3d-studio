@@ -1,115 +1,113 @@
-# 和紙折紙 · Origami Atelier
+# Washi Origami · Origami Atelier
 
-> 一张素纸，十五道折痕。在浏览器里，把它一折一折折成展翅欲飞的立体千纸鹤。
+> One sheet of paper, fifteen creases. Fold it in the browser, one step at a time, until a crane spreads its wings.
 
-一个滚动驱动的 3D 折纸展示工坊：以精确的刚性折纸运动学，把二维折痕图逐帧还原为 3D 纸模型，配合和纸质感渲染与日式编辑排版，从平纸到成品，一折一折展开给你看。
+A scroll-driven 3D origami atelier. An exact rigid-origami kinematics engine turns a 2D crease pattern into a 3D paper model frame by frame, wrapped in washi-paper rendering and Japanese editorial layout — from a flat sheet to a finished piece, fold by fold.
 
-A scroll-driven 3D origami atelier that folds a flat sheet into a crane, one crease at a time — built on an exact rigid-origami kinematics engine with washi-paper rendering.
+![Crane folding demo](docs/screenshots/crane-fold-demo.gif)
 
-![千纸鹤折纸演示](docs/screenshots/crane-fold-demo.gif)
+## Features
 
-## 特性
+- **Two complete models** — a traditional crane (15 folds) and a classic dart paper airplane (7 folds), each step with its own crease diagram, instructions, and tips.
+- **Zero-strain rigid origami engine** — every frame solves rigid transforms for each facet, so edge lengths stay exactly correct at any moment of the fold. No stretched paper, ever.
+- **Scroll-driven narrative** — the hero screen shows the finished piece; scrolling down unfolds it step by step, and the chapter rail jumps straight to any fold.
+- **Washi paper rendering** — procedurally generated bokashi gradients, paper fibers, and gold-leaf flecks, with two-sided materials, soft shadows, and a display plinth.
+- **Atelier controls** — per-step 0–100% scrubbing, whole-sequence progress, playback speed (0.5×–2×), five camera presets, auto-follow camera, X-ray mode, a rear-view picture-in-picture window, crease toggling, and scroll-wheel zoom.
+- **Traditional palette** — switch paper color between vermilion, ultramarine, matcha, golden brown, and pale sakura at any time.
+- **Free inspection** — drag to rotate to any angle and view the finished piece 360°.
 
-- **两件作品，完整折序** — 传统千纸鹤（15 折）与经典尖头纸飞机（7 折），每一步都有折痕图、文字说明与要领提示。
-- **零形变的刚性折纸引擎** — 每一帧都求解各面片的刚体变换，保证任意折叠瞬间边长误差恒为 0，不会出现纸张被「拉伸」的穿帮。
-- **滚动叙事** — 首屏是成品展示，向下滚动即逐折展开；右侧章节轨道可直达任意一步。
-- **和纸质感渲染** — 程序化生成渐变、纸纤维、金箔斑点纹理，正反双面材质、软阴影与展台圆环。
-- **工坊精调** — 单步 0–100% 慢放、全流程进度、播放速度（0.5×–2×）、五种相机预设、自动运镜、透视、背面小窗、折痕显隐、滚轮缩放。
-- **传统色彩** — 朱赤、群青、若竹、山吹、薄樱五色和纸随时切换。
-- **自由赏玩** — 任意角度拖拽旋转，成品 360° 观看。
+## Screenshots
 
-## 截图
-
-| 千纸鹤 · 首屏 | 千纸鹤 · 逐折展开 |
+| Crane · Hero | Crane · Folding |
 | --- | --- |
-| ![千纸鹤首屏](docs/screenshots/01-hero.png) | ![千纸鹤折叠过程](docs/screenshots/02-fold-progress.png) |
+| ![Crane hero](docs/screenshots/01-hero.png) | ![Crane folding](docs/screenshots/02-fold-progress.png) |
 
-| 工坊精调面板 | 纸飞机 · 成品 |
+| Atelier controls | Paper airplane · Finished |
 | --- | --- |
-| ![工坊精调面板](docs/screenshots/03-atelier.png) | ![纸飞机首屏](docs/screenshots/04-airplane-hero.png) |
+| ![Atelier controls](docs/screenshots/03-atelier.png) | ![Paper airplane hero](docs/screenshots/04-airplane-hero.png) |
 
-### 纸飞机 · 翼梢小翼
+### Paper airplane · Winglets
 
-![纸飞机翼梢小翼](docs/screenshots/05-airplane-fold.png)
+![Paper airplane winglets](docs/screenshots/05-airplane-fold.png)
 
-## 快速开始
+## Quick start
 
-需要 Node.js 18+。
+Requires Node.js 18+.
 
 ```bash
 npm install
-npm run dev      # 本地开发，默认 http://localhost:5173
-npm run build    # 类型检查 + 生产构建，输出到 dist/
-npm run preview  # 预览生产构建
+npm run dev      # local dev server, http://localhost:5173 by default
+npm run build    # type check + production build into dist/
+npm run preview  # preview the production build
 ```
 
-## 使用方式
+## Usage
 
-1. 首屏点击「向下逐折展开」，或直接在页面上向下滚动，模型会随滚动进度逐步折叠。
-2. 点击顶部「工坊精调」或底部「精调」，打开控制面板做精细调整。
-3. 底部胶囊栏可重置回平纸、上一步 / 下一步、连续演示。
-4. 顶部切换「传统千纸鹤 / 经典纸飞机」，或点选右侧色点更换纸色。
-5. 在画布上按住左键拖拽，可 360° 旋转观察。
+1. On the hero screen, click **Unfold step by step**, or simply scroll down — the model folds as you scroll.
+2. Click **Atelier** in the top bar or **Tune** in the bottom dock to open the control panel.
+3. The bottom dock resets to the flat sheet, steps backward/forward, and starts the continuous demo.
+4. Switch between **Crane** and **Paper airplane** in the top bar, or pick a paper color from the top-right swatches.
+5. Hold the left mouse button and drag on the canvas to rotate the model 360°.
 
-## 技术实现
+## How it works
 
-纯前端，无后端、无贴图资源 —— 折痕、几何、纹理都在运行时计算生成。
+A pure frontend project — no backend and no image assets. Crease patterns, geometry, and textures are all generated at runtime.
 
-- **React 19 + TypeScript** — 界面与状态
-- **Three.js** — 3D 渲染、光照、阴影与相机
-- **Vite** — 开发与构建
-- **lucide-react** — 图标
+- **React 19 + TypeScript** — UI and state
+- **Three.js** — 3D rendering, lighting, shadows, and cameras
+- **Vite** — development and build
+- **lucide-react** — icons
 
-### 折纸引擎
+### The origami engine
 
-`src/engine/origamiEngine.ts` 提供与具体模型无关的运动学原语：
+`src/engine/origamiEngine.ts` provides model-agnostic kinematics primitives:
 
-1. **折痕图建模** — 每个模型由二维顶点、三角形面片与折痕（谷折 / 山折）定义。
-2. **逐步刚体折叠** — 每道折痕按步骤进度绕折痕线旋转，面片保持刚性，不产生任何缩放。
-3. **面片顶点求解** — 通过三球交会 / 重心坐标插值求出每个顶点在各面片上的位置，保证面片之间共享边完全吻合。
-4. **堆叠消歧** — 对折叠中重合的面片施加平滑的层间偏移，既消除 Z-fighting，又不会出现跳变。
-5. **形变校验** — 引擎实时计算最大边长相对误差（`maxEdgeStrainPct`），成品恒为 `0.000%`。
+1. **Crease-pattern modeling** — each model is defined by 2D vertices, triangle facets, and creases (valley or mountain).
+2. **Stepwise rigid folding** — each crease rotates around its own line according to step progress, keeping every facet rigid with zero scaling.
+3. **Facet vertex solving** — vertex positions on each facet are solved with three-sphere intersection and barycentric interpolation, so shared edges between facets line up exactly.
+4. **Stack disambiguation** — smoothly blended offsets separate coincident facets during a fold, removing Z-fighting without any popping.
+5. **Strain validation** — the engine continuously reports the maximum relative edge-length error (`maxEdgeStrainPct`), which stays at `0.000%` for the finished pieces.
 
-模型位于 `src/models/`，只描述折痕与步骤，不含渲染逻辑，新增作品只需再写一份折痕图。
+Models live in `src/models/` and only describe creases and steps — no rendering logic. Adding a new piece means writing one more crease pattern.
 
-## 项目结构
+## Project structure
 
 ```text
 .
 ├── index.html
 ├── src
 │   ├── main.tsx
-│   ├── App.tsx                 # 滚动叙事、章节、工坊面板与状态编排
-│   ├── index.css               # 和纸配色与版面样式
+│   ├── App.tsx                 # Scroll narrative, chapters, atelier panel, state
+│   ├── index.css               # Washi palette and editorial layout
 │   ├── components
-│   │   └── OrigamiViewport.tsx # Three.js 场景、和纸纹理、相机与交互
+│   │   └── OrigamiViewport.tsx # Three.js scene, washi textures, camera, input
 │   ├── engine
-│   │   └── origamiEngine.ts    # 刚性折纸运动学与三维求解
+│   │   └── origamiEngine.ts    # Rigid-origami kinematics and 3D solving
 │   └── models
-│       ├── crane.ts            # 千纸鹤：32 顶点 / 48 面片 / 15 折
-│       └── paperAirplane.ts    # 纸飞机：7 折
+│       ├── crane.ts            # Crane: 32 vertices / 48 facets / 15 folds
+│       └── paperAirplane.ts    # Paper airplane: 7 folds
 └── docs
     └── screenshots
 ```
 
-## 操作一览
+## Controls
 
-| 操作 | 位置 | 说明 |
+| Action | Location | Description |
 | --- | --- | --- |
-| 滚动 | 页面 | 按章节进度折纸 |
-| 拖拽 | 画布 | 360° 旋转视角 |
-| 精调 | 顶部 / 底部 | 展开工坊面板 |
-| 单步慢放 | 面板 | 当前折 0–100% 手动控制 |
-| 演示 | 底部胶囊 | 自动连续播放折叠 |
-| 相机 | 面板 | 立体 / 俯视 / 正面 / 侧面 / 背面 |
-| 透视 | 面板 | 半透明显示层叠结构 |
-| 背面窗 | 面板 | 右下角显示背面视角 |
-| 滚轮缩放 | 面板 | 开启后用滚轮缩放模型 |
+| Scroll | Page | Fold along the chapter progress |
+| Drag | Canvas | Rotate the view 360° |
+| Atelier | Top bar / bottom dock | Open the control panel |
+| Step scrub | Panel | Manually drive the current fold from 0–100% |
+| Demo | Bottom dock | Play the whole fold automatically |
+| Camera | Panel | Isometric / top / front / side / back |
+| X-ray | Panel | Show stacked layers translucently |
+| Rear view | Panel | Picture-in-picture view from behind |
+| Wheel zoom | Panel | Enable scroll-wheel zooming of the model |
 
-## 说明
+## Notes
 
-- 模型以等距刚性折纸为目标，追求几何正确与可读的折序呈现，并非逐毫米还原真实纸张的厚度与弹性形变。
-- 页面以桌面浏览体验为主；窄屏下提供基础适配。
+- The models target isometric rigid origami: geometric correctness and a readable fold sequence rather than millimeter-accurate paper thickness and elasticity.
+- The experience is designed desktop-first, with basic support on narrow screens.
 
 ## License
 
