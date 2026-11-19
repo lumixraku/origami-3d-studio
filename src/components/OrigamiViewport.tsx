@@ -16,6 +16,8 @@ export interface OrigamiViewportProps {
   showPip: boolean;
   showCreases: boolean;
   paperColor: string;
+  autoRotate?: boolean;
+  enableZoom?: boolean;
   onFrameEvaluated?: (strainPct: number) => void;
 }
 
@@ -23,11 +25,11 @@ const CAMERA_PRESETS: Record<
   CameraPresetId,
   { pos: [number, number, number]; target: [number, number, number] }
 > = {
-  iso: { pos: [-2.45, 1.95, -2.55], target: [0, 0.18, 0] },
-  top: { pos: [0, 3.9, -0.04], target: [0, 0.1, 0] },
-  front: { pos: [0, 0.85, -3.5], target: [0, 0.22, 0] },
-  side: { pos: [-3.5, 0.85, 0], target: [0, 0.22, 0] },
-  back: { pos: [0, 0.95, 3.5], target: [0, 0.22, 0] },
+  iso: { pos: [-2.75, 1.85, -2.65], target: [-0.36, 0.16, 0] },
+  top: { pos: [-0.32, 3.9, -0.04], target: [-0.32, 0.1, 0] },
+  front: { pos: [-0.32, 0.85, -3.55], target: [-0.32, 0.22, 0] },
+  side: { pos: [-3.55, 0.85, -0.25], target: [0, 0.22, -0.25] },
+  back: { pos: [0.32, 0.95, 3.55], target: [0.32, 0.22, 0] },
 };
 
 /**
@@ -117,6 +119,8 @@ export const OrigamiViewport: React.FC<OrigamiViewportProps> = ({
   showPip,
   showCreases,
   paperColor,
+  autoRotate = false,
+  enableZoom = false,
   onFrameEvaluated,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -126,9 +130,19 @@ export const OrigamiViewport: React.FC<OrigamiViewportProps> = ({
     xrayMode,
     showPip,
     showCreases,
+    autoRotate,
+    enableZoom,
     onFrameEvaluated,
   });
-  propsRef.current = { progress, xrayMode, showPip, showCreases, onFrameEvaluated };
+  propsRef.current = {
+    progress,
+    xrayMode,
+    showPip,
+    showCreases,
+    autoRotate,
+    enableZoom,
+    onFrameEvaluated,
+  };
 
   const sceneObjRef = useRef<{
     camera: THREE.PerspectiveCamera;
@@ -172,6 +186,9 @@ export const OrigamiViewport: React.FC<OrigamiViewportProps> = ({
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.075;
+    controls.enableZoom = enableZoom;
+    controls.autoRotate = autoRotate;
+    controls.autoRotateSpeed = 0.7;
     controls.minDistance = 1.2;
     controls.maxDistance = 9.0;
     controls.target.set(...CAMERA_PRESETS.iso.target);
@@ -491,8 +508,13 @@ export const OrigamiViewport: React.FC<OrigamiViewportProps> = ({
         xrayMode: isXray,
         showCreases: creasesOn,
         showPip: pipOn,
+        autoRotate: rotateOn,
+        enableZoom: zoomOn,
         onFrameEvaluated: reportStrain,
       } = propsRef.current;
+
+      controls.autoRotate = rotateOn;
+      controls.enableZoom = zoomOn;
 
       frontMat.transparent = isXray;
       frontMat.opacity = isXray ? 0.5 : 1.0;
