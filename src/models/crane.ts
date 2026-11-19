@@ -7,8 +7,8 @@ import {
   type Vec2,
   type Vec3,
   barycentric2D,
-  computeCoplanarStackOffsets,
   computeMaxEdgeStrainPct,
+  computeSmoothStackOffsets,
   dist2,
   dist3,
   evalBarycentric3D,
@@ -351,19 +351,158 @@ function evalPetalFold(
 // World Rigid Pose Transform (Pure SO(3) Rotation + Translation)
 // ============================================================================
 
-function getWorldStackDir(globalProgress: number): Vec3 {
-  const alignBlend = smooth01(globalProgress - 4);
-  const yawAngle = (1 - alignBlend) * (Math.PI / 4);
-  const standBlend = smooth01((globalProgress - 13) / 2);
-  let dir: Vec3 = [0, 1, 0];
-  if (Math.abs(yawAngle) > 1e-9) {
-    dir = rotatePointAroundAxis(dir, [0, 0, 0], [0, 1, 0], -yawAngle);
+function computeCraneLayerState(
+  activeStepIndex: number,
+  stepT: number,
+): { prios: number[]; upSigns: Array<1 | -1> } {
+  const prios: number[] = new Array(rawFacetMetas.length);
+  const upSigns: Array<1 | -1> = new Array(rawFacetMetas.length);
+
+  for (let i = 0; i < rawFacetMetas.length; i++) {
+    const m = rawFacetMetas[i];
+    const sec = m.sector;
+
+    // Phase 1: Steps 1..5 (idx 0..4)
+    if (activeStepIndex === 0) {
+      const over90 = Math.sin(smooth01(stepT) * Math.PI) > 0.5;
+      const moving = over90 && (sec === 'C3R' || sec === 'C3L' || sec === 'C0F' || sec === 'C2F');
+      prios[i] = moving ? 1 : 0;
+      upSigns[i] = moving ? -1 : 1;
+      continue;
+    }
+    if (activeStepIndex === 1) {
+      const over90 = smooth01(stepT) > 0.5;
+      const moving = over90 && (sec === 'C1L' || sec === 'C2B' || sec === 'C2F' || sec === 'C3L');
+      prios[i] = moving ? 1 : 0;
+      upSigns[i] = moving ? -1 : 1;
+      continue;
+    }
+    if (activeStepIndex === 2 || (activeStepIndex === 3 && stepT <= 0.5)) {
+      const over90 = activeStepIndex === 3 || smooth01(stepT) > 0.5;
+      if (sec === 'C1R' || sec === 'C0B') { prios[i] = 0; upSigns[i] = 1; }
+      else if (sec === 'C1L' || sec === 'C2B') { prios[i] = 1; upSigns[i] = -1; }
+      else if (!over90) {
+        if (sec === 'C3R' || sec === 'C0F') { prios[i] = 0; upSigns[i] = 1; }
+        else { prios[i] = 1; upSigns[i] = -1; }
+      } else if (sec === 'C3L' || sec === 'C2F') { prios[i] = 2; upSigns[i] = 1; }
+      else { prios[i] = 3; upSigns[i] = -1; }
+      continue;
+    }
+    if (activeStepIndex === 3 || (activeStepIndex === 4 && stepT <= 0.5)) {
+      if (sec === 'C1R' || sec === 'C0B') { prios[i] = 0; upSigns[i] = 1; }
+      else if (sec === 'C1L' || sec === 'C2B') { prios[i] = 1; upSigns[i] = -1; }
+      else if (sec === 'C0F' || sec === 'C2F') { prios[i] = 2; upSigns[i] = 1; }
+      else { prios[i] = 3; upSigns[i] = -1; }
+      continue;
+    }
+
+    // Baseline Square Base (end of Step 5):
+    let p = 0;
+    let sgn: 1 | -1 = 1;
+    if (sec === 'C1R' || sec === 'C1L') { p = 0; sgn = 1; }
+    else if (sec === 'C0B' || sec === 'C2B') { p = 1; sgn = -1; }
+    else if (sec === 'C0F' || sec === 'C2F') { p = 2; sgn = 1; }
+    else { p = 3; sgn = -1; }
+
+    const isTuckF = m.id.startsWith('tailF_tuck') || m.id.startsWith('neckF_tuck') || m.id === 'headF_tuckBlade';
+    const isTuckB = m.id.startsWith('tailB_tuck') || m.id.startsWith('neckB_tuck') || m.id === 'headB_tuckBlade';
+
+    if (activeStepIndex === 4) {
+      prios[i] = p;
+      upSigns[i] = sgn;
+      continue;
+    }
+
+    // Step 6 (idx 5): Front Kite pre-crease (switch target stack only above 90 deg!)
+    if (activeStepIndex === 5) {
+      if (Math.sin(smooth01(stepT) * Math.PI) > 0.52) {
+        if (m.id === 'wF_flap_R' || m.id === 'wF_flap_L') { p = 4; sgn = 1; }
+        else if (isTuckF) { p = 5; sgn = -1; }
+      }
+      prios[i] = p;
+      upSigns[i] = sgn;
+      continue;
+    }
+
+    // Step 7 (idx 6): Top Apex horizontal pre-crease (switch target stack only above 90 deg!)
+    if (activeStepIndex === 6) {
+      const isApex = m.id.endsWith('_body_R') || m.id.endsWith('_body_L') || m.id.endsWith('_hip');
+      if (isApex && Math.sin(smooth01(stepT) * Math.PI) > 0.55) {
+        p = 7 - p;
+        sgn = (sgn === 1 ? -1 : 1) as 1 | -1;
+      }
+      prios[i] = p;
+      upSigns[i] = sgn;
+      continue;
+    }
+
+    // Step 8+ (idx >= 7): Front Petal Fold
+    if (activeStepIndex === 7 && smooth01(stepT) <= 0.5) {
+      prios[i] = p;
+      upSigns[i] = sgn;
+      continue;
+    }
+
+    // Front Petal settled:
+    if (m.id === 'wF_flap_R' || m.id === 'wF_flap_L') { p = 5.0; sgn = -1; }
+    else if (m.id === 'wF_main_R' || m.id === 'wF_main_L') { p = 4.0; sgn = 1; }
+    else if (isTuckF) { p = 2.6; sgn = -1; }
+    else if (sec === 'C0F' || sec === 'C2F') { p = 2.0; sgn = 1; }
+
+    // Step 9 (idx 8): Back Kite pre-crease (switch target stack only above 90 deg!)
+    if (activeStepIndex === 8) {
+      if (Math.sin(smooth01(stepT) * Math.PI) > 0.52) {
+        if (m.id === 'wB_flap_R' || m.id === 'wB_flap_L') { p = -1.0; sgn = -1; }
+        else if (isTuckB) { p = -2.0; sgn = 1; }
+      }
+      prios[i] = p;
+      upSigns[i] = sgn;
+      continue;
+    }
+
+    if (activeStepIndex === 9 && smooth01(stepT) <= 0.5) {
+      prios[i] = p;
+      upSigns[i] = sgn;
+      continue;
+    }
+
+    // Step 10+ (idx >= 9): Back Petal Fold
+    if (activeStepIndex >= 9) {
+      if (m.id === 'wB_flap_R' || m.id === 'wB_flap_L') { p = -2.0; sgn = 1; }
+      else if (m.id === 'wB_main_R' || m.id === 'wB_main_L') { p = -1.0; sgn = -1; }
+      else if (isTuckB) { p = 0.4; sgn = 1; }
+      else if (sec === 'C0B' || sec === 'C2B') { p = 1.0; sgn = -1; }
+    }
+
+    // Step 11+ (idx >= 10): Neck Inside Reverse Fold
+    if (activeStepIndex > 10 || (activeStepIndex === 10 && stepT > 0.55)) {
+      if (m.id === 'neckF_mid1' || m.id === 'neckF_mid2' || m.id === 'headF_blade') { p = 2.7; sgn = -1; }
+      else if (m.id === 'neckF_tuckMid1' || m.id === 'neckF_tuckMid2' || m.id === 'headF_tuckBlade') { p = 2.1; sgn = 1; }
+      else if (m.id === 'neckB_mid1' || m.id === 'neckB_mid2' || m.id === 'headB_blade') { p = 0.3; sgn = 1; }
+      else if (m.id === 'neckB_tuckMid1' || m.id === 'neckB_tuckMid2' || m.id === 'headB_tuckBlade') { p = 0.9; sgn = -1; }
+    }
+
+    // Step 12+ (idx >= 11): Tail Inside Reverse Fold
+    if (activeStepIndex > 11 || (activeStepIndex === 11 && stepT > 0.55)) {
+      if (m.id === 'tailF_blade') { p = 2.7; sgn = -1; }
+      else if (m.id === 'tailF_tuckBlade') { p = 2.1; sgn = 1; }
+      else if (m.id === 'tailB_blade') { p = 0.3; sgn = 1; }
+      else if (m.id === 'tailB_tuckBlade') { p = 0.9; sgn = -1; }
+    }
+
+    // Step 13+ (idx >= 12): Head / Beak Inside Reverse Fold
+    if (activeStepIndex > 12 || (activeStepIndex === 12 && stepT > 0.55)) {
+      if (m.id === 'headF_tuckBlade') { p = 2.8; sgn = -1; }
+      else if (m.id === 'headF_blade') { p = 2.0; sgn = 1; }
+      else if (m.id === 'headB_tuckBlade') { p = 0.2; sgn = 1; }
+      else if (m.id === 'headB_blade') { p = 1.0; sgn = -1; }
+    }
+
+    prios[i] = p;
+    upSigns[i] = sgn;
   }
-  if (standBlend > 1e-9) {
-    dir = rotatePointAroundAxis(dir, [0, 0, 0], [1, 0, 0], (Math.PI / 2) * standBlend);
-    dir = rotatePointAroundAxis(dir, [0, 0, 0], [0, 1, 0], (-Math.PI / 2) * standBlend);
-  }
-  return dir;
+
+  return { prios, upSigns };
 }
 
 function transformDiamondToWorld(
@@ -428,15 +567,15 @@ function evaluateCrane(globalProgress: number): EvaluatedOrigamiFrame {
         primary[vid] = rotatePointAroundAxis(primary[vid], [0, 0, 0], [0, 0, 1], ang);
       }
     } else if (activeStepIndex === 1) {
-      // Step 2: Fold diagonal C1 <-> C3 (Z_d = 0) by 180 deg -> Big Right Triangle
-      const ang = -easeT * Math.PI; // -180 deg around +X_d swings -Z_d up (+Y) onto +Z_d
+      // Step 2: Fold diagonal C1 <-> C3 (Z_d = 0) by +180 deg -> Big Right Triangle (valley fold upward +Y)
+      const ang = easeT * Math.PI;
       for (const vid of [V.C2, V.M2, V.M3]) {
         primary[vid] = rotatePointAroundAxis(primary[vid], [0, 0, 0], [1, 0, 0], ang);
       }
     } else if (activeStepIndex === 2) {
       // Step 3: From Big Triangle, fold right half (X_d > 0) over Z_d axis onto left half -> Small Triangle
       for (const vid of [V.C2, V.M2, V.M3]) {
-        primary[vid] = rotatePointAroundAxis(primary[vid], [0, 0, 0], [1, 0, 0], -Math.PI);
+        primary[vid] = rotatePointAroundAxis(primary[vid], [0, 0, 0], [1, 0, 0], Math.PI);
       }
       const ang = easeT * Math.PI; // +180 deg around +Z_d: +X_d swings over +Y onto -X_d
       for (const vid of [V.C3, V.M0, V.M3]) {
@@ -484,33 +623,13 @@ function evaluateCrane(globalProgress: number): EvaluatedOrigamiFrame {
       pos[i] = evalBarycentric3D(bary, primary[tri[0]], primary[tri[1]], primary[tri[2]]);
     }
 
-    // Dynamic layer priorities for early triangle folds vs Square Base
-    const earlyPrios = rawFacetMetas.map((m) => {
-      if (activeStepIndex <= 2) {
-        const map: Record<string, number> = {
-          C1R: 10,
-          C0B: 10,
-          C1L: 20,
-          C2B: 20,
-          C3L: 30,
-          C2F: 30,
-          C3R: 40,
-          C0F: 40,
-        };
-        return map[m.sector];
-      }
-      if (activeStepIndex === 3) {
-        if (m.sector === 'C1R' || m.sector === 'C0B') return 10;
-        if (m.sector === 'C1L' || m.sector === 'C2B') return 16;
-      }
-      return m.birdPrio;
-    });
-
     const worldPos = transformDiamondToWorld(pos, clamped);
-    const stackDir = getWorldStackDir(clamped);
+    const { prios: earlyPrios, upSigns: earlySigns } = computeCraneLayerState(activeStepIndex, stepT);
+    const { facetOffsets, facetCornerOffsets } = computeSmoothStackOffsets(worldPos, facets, earlyPrios, earlySigns, 0.0034);
     return {
       vertexPositions: worldPos,
-      facetOffsets: computeCoplanarStackOffsets(worldPos, facets, earlyPrios, 0.0022, stackDir),
+      facetOffsets,
+      facetCornerOffsets,
       activeStepIndex,
       stepProgress: stepT,
       maxEdgeStrainPct: computeMaxEdgeStrainPct(vertices2D, facets, worldPos),
@@ -541,10 +660,10 @@ function evaluateCrane(globalProgress: number): EvaluatedOrigamiFrame {
   pos[V.M3] = [-S, 0, S];
 
   if (activeStepIndex === 5) {
-    // Step 6: Front Kite Pre-crease (fold M0 around Q0->C3 and M3 around Q3->C3 in +Y, then unfold)
+    // Step 6: Front Kite Pre-crease (fold M0 around Q0->C3 and M3 around Q3->C3 outward in +Y, then unfold)
     const ang = Math.sin(easeT * Math.PI) * Math.PI * 0.96;
-    pos[V.M0] = rotatePointAroundLine(pos[V.M0], pos[V.Q0], pos[V.C3], -ang);
-    pos[V.M3] = rotatePointAroundLine(pos[V.M3], pos[V.Q3], pos[V.C3], ang);
+    pos[V.M0] = rotatePointAroundLine(pos[V.M0], pos[V.Q0], pos[V.C3], ang);
+    pos[V.M3] = rotatePointAroundLine(pos[V.M3], pos[V.Q3], pos[V.C3], -ang);
   } else if (activeStepIndex === 6) {
     // Step 7: Top Apex O Horizontal Pre-crease (fold O forward over Q3->Q0 and unfold)
     const ang = Math.sin(easeT * Math.PI) * Math.PI * 0.92;
@@ -562,10 +681,10 @@ function evaluateCrane(globalProgress: number): EvaluatedOrigamiFrame {
     pos[V.M3] = [...BB_D];
 
     if (activeStepIndex === 8) {
-      // Step 9: Back Kite Pre-crease (fold M1 & M2 on -Y side and unfold)
+      // Step 9: Back Kite Pre-crease (fold M1 & M2 outward on -Y side and unfold)
       const ang = Math.sin(easeT * Math.PI) * Math.PI * 0.96;
-      pos[V.M1] = rotatePointAroundLine(pos[V.M1], pos[V.Q1], pos[V.C1], ang);
-      pos[V.M2] = rotatePointAroundLine(pos[V.M2], pos[V.Q2], pos[V.C1], -ang);
+      pos[V.M1] = rotatePointAroundLine(pos[V.M1], pos[V.Q1], pos[V.C1], -ang);
+      pos[V.M2] = rotatePointAroundLine(pos[V.M2], pos[V.Q2], pos[V.C1], ang);
     } else if (activeStepIndex === 9) {
       // Step 10: Back Petal Fold -> Completes Bird Base!
       const pfB = evalPetalFold(easeT * Math.PI, -1);
@@ -600,15 +719,13 @@ function evaluateCrane(globalProgress: number): EvaluatedOrigamiFrame {
     pos[V.HthF] = lerp3(pos[V.NoutF], pos[V.C2], HEAD_TH_T);
     pos[V.HthB] = lerp3(pos[V.NoutB], pos[V.C2], HEAD_TH_T);
 
-    const prios = rawFacetMetas.map((m) => {
-      if (activeStepIndex === 8 && (m.id === 'wB_flap_R' || m.id === 'wB_flap_L')) return 0;
-      return m.birdPrio;
-    });
     const worldPos = transformDiamondToWorld(pos, clamped);
-    const stackDir = getWorldStackDir(clamped);
+    const { prios, upSigns } = computeCraneLayerState(activeStepIndex, stepT);
+    const { facetOffsets, facetCornerOffsets } = computeSmoothStackOffsets(worldPos, facets, prios, upSigns, 0.0034);
     return {
       vertexPositions: worldPos,
-      facetOffsets: computeCoplanarStackOffsets(worldPos, facets, prios, 0.0022, stackDir),
+      facetOffsets,
+      facetCornerOffsets,
       activeStepIndex,
       stepProgress: stepT,
       maxEdgeStrainPct: computeMaxEdgeStrainPct(vertices2D, facets, worldPos),
@@ -788,27 +905,14 @@ function evaluateCrane(globalProgress: number): EvaluatedOrigamiFrame {
     pos[V.C1] = rotatePointAroundLine(BB_WING_UP, BB_QL, BB_QR, -wingAngB);
   }
 
-  const headReversed = activeStepIndex > 12 || (activeStepIndex === 12 && stepT > 0.55);
-
-  const prios = rawFacetMetas.map((m) => {
-    if (activeStepIndex >= 14 && stepT > 0.3 && (m.id === 'wB_main_R' || m.id === 'wB_main_L')) {
-      return 9;
-    }
-    if (headReversed) {
-      if (m.id === 'headF_blade') return 43;
-      if (m.id === 'headF_tuckBlade') return 50;
-      if (m.id === 'headB_blade') return 29;
-      if (m.id === 'headB_tuckBlade') return 21;
-    }
-    return m.birdPrio;
-  });
-
   const worldPos = transformDiamondToWorld(pos, clamped);
-  const stackDir = getWorldStackDir(clamped);
+  const { prios, upSigns } = computeCraneLayerState(activeStepIndex, stepT);
+  const { facetOffsets, facetCornerOffsets } = computeSmoothStackOffsets(worldPos, facets, prios, upSigns, 0.0034);
 
   return {
     vertexPositions: worldPos,
-    facetOffsets: computeCoplanarStackOffsets(worldPos, facets, prios, 0.0022, stackDir),
+    facetOffsets,
+    facetCornerOffsets,
     activeStepIndex,
     stepProgress: stepT,
     maxEdgeStrainPct: computeMaxEdgeStrainPct(vertices2D, facets, worldPos),

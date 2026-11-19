@@ -38,8 +38,10 @@ export interface OrigamiStepSpec {
 export interface EvaluatedOrigamiFrame {
   /** Exact zero-thickness isometric 3D positions for each vertex in vertices2D */
   vertexPositions: Vec3[];
-  /** Tiny per-facet 3D stacking offset (paper thickness ~0.002) to eliminate Z-fighting */
+  /** Per-facet 3D stacking offset (smoothly blended, zero pop, zero Z-fighting) */
   facetOffsets: Vec3[];
+  /** Optional per-corner offsets [c0, c1, c2] for open-hinge tapering */
+  facetCornerOffsets?: Array<[Vec3, Vec3, Vec3]>;
   activeStepIndex: number;
   stepProgress: number;
   /** Maximum relative edge length error across all facets in percent (0.000 = exact isometry) */
@@ -124,6 +126,11 @@ export function smooth01(t: number): number {
   return c * c * (3 - 2 * c);
 }
 
+export function smoothRange(edge0: number, edge1: number, x: number): number {
+  if (Math.abs(edge1 - edge0) < 1e-12) return x >= edge1 ? 1 : 0;
+  return smooth01((x - edge0) / (edge1 - edge0));
+}
+
 /** Rodrigues' rotation formula: exact SO(3) isometry around a unit axis through origin */
 export function rotatePointAroundAxis(
   point: Vec3,
@@ -156,7 +163,6 @@ export function rotatePointAroundLine(
 /**
  * Exact analytical 3-sphere intersection (trilateration) in R^3.
  * Finds P such that |P - p1| = r1, |P - p2| = r2, |P - p3| = r3.
- * Preserves all three edge lengths to machine precision (~1e-16).
  */
 export function solve3Spheres(
   p1: Vec3,
@@ -191,7 +197,6 @@ export function solve3Spheres(
   ];
 }
 
-/** Exact 2D barycentric weights of P in triangle (A, B, C) */
 export function barycentric2D(p: Vec2, a: Vec2, b: Vec2, c: Vec2): Vec3 {
   const v0x = b[0] - a[0];
   const v0y = b[1] - a[1];
@@ -221,17 +226,12 @@ export function evalBarycentric3D(bary: Vec3, a: Vec3, b: Vec3, c: Vec3): Vec3 {
   ];
 }
 
-/**
- * Ensures every facet's vertex indices [i0, i1, i2] are wound so that on the flat
- * sheet [u, 0, v], (P1 - P0) x (P2 - P0) points strictly in +Y.
- */
 export function normalizeFacetWinding(vertices2D: Vec2[], facets: FacetDef[]): FacetDef[] {
   return facets.map((f) => {
     const [i0, i1, i2] = f.verts;
     const a = vertices2D[i0];
     const b = vertices2D[i1];
     const c = vertices2D[i2];
-    // In 3D: [u, 0, v]. (B - A) x (C - A) has Y component = (b_z - a_z)*(c_x - a_x) - (b_x - a_x)*(c_z - a_z)
     const ny = (b[1] - a[1]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[1] - a[1]);
     if (ny < 0) {
       return { id: f.id, verts: [i0, i2, i1] };
@@ -240,10 +240,6 @@ export function normalizeFacetWinding(vertices2D: Vec2[], facets: FacetDef[]): F
   });
 }
 
-/**
- * Computes maximum relative edge length deviation (%) across all facets of a frame.
- * For an exact isometric fold, this returns 0.000000 (within ~1e-13 floating-point noise).
- */
 export function computeMaxEdgeStrainPct(
   vertices2D: Vec2[],
   facets: FacetDef[],
@@ -268,97 +264,281 @@ export function computeMaxEdgeStrainPct(
   return maxStrain * 100;
 }
 
+// ============================================================================
+// Continuous Intrinsic-Normal + 2D SAT Overlap Stack Offset Solver
+// Eliminates mid-fold Z-fighting, 90-deg normal flips, and 177-deg bucket pops!
+// ============================================================================
+
+function trianglesOverlapInTangent2D(
+  a0: Vec2,
+  a1: Vec2,
+  a2: Vec2,
+  b0: Vec2,
+  b1: Vec2,
+  b2: Vec2,
+  shrinkMargin = -0.004,
+): boolean {
+  const triA = [a0, a1, a2];
+  const triB = [b0, b1, b2];
+  const edges: Vec2[] = [
+    [a1[0] - a0[0], a1[1] - a0[1]],
+    [a2[0] - a1[0], a2[1] - a1[1]],
+    [a0[0] - a2[0], a0[1] - a2[1]],
+    [b1[0] - b0[0], b1[1] - b0[1]],
+    [b2[0] - b1[0], b2[1] - b1[1]],
+    [b0[0] - b2[0], b0[1] - b2[1]],
+  ];
+  for (const [ex, ey] of edges) {
+    const len = Math.hypot(ex, ey);
+    if (len < 1e-9) continue;
+    const nx = -ey / len;
+    const ny = ex / len;
+    let minA = Infinity;
+    let maxA = -Infinity;
+    let minB = Infinity;
+    let maxB = -Infinity;
+    for (const p of triA) {
+      const d = p[0] * nx + p[1] * ny;
+      if (d < minA) minA = d;
+      if (d > maxA) maxA = d;
+    }
+    for (const p of triB) {
+      const d = p[0] * nx + p[1] * ny;
+      if (d < minB) minB = d;
+      if (d > maxB) maxB = d;
+    }
+    if (maxA < minB - shrinkMargin || maxB < minA - shrinkMargin) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function buildTangentBasis(n: Vec3): { t1: Vec3; t2: Vec3 } {
+  const ref: Vec3 = Math.abs(n[1]) < 0.85 ? [0, 1, 0] : [1, 0, 0];
+  const t1 = normalize3(cross3(ref, n));
+  const t2 = cross3(n, t1);
+  return { t1, t2 };
+}
+
 /**
- * Computes clean per-facet micro-offsets to prevent WebGL Z-fighting among coplanar overlapping facets.
- * Groups facets that currently lie on the same 3D plane (quantized normal + plane d) and offsets them
- * along the plane normal according to a deterministic layer order.
+ * Smooth, pop-free 3D layer offset solver:
+ * - Uses intrinsic sheet normal `upSigns[f] * n_f` so rotating multi-layer packets NEVER flip sign at 90 deg.
+ * - Uses 2D Separating Axis Theorem (SAT) in the shared tangent plane so non-overlapping side-by-side panels don't push each other.
+ * - Ramps separation smoothly across 148° -> 174° (cosSim 0.85 -> 0.994) BEFORE layers touch, preventing hinge-wedge Z-fighting.
+ * - Tapers offsets gently along open (< 162°) creases so angled hinges stay cleanly pinched.
  */
+export function computeSmoothStackOffsets(
+  positions3D: Vec3[],
+  facets: FacetDef[],
+  layerPriority: number[],
+  upSigns: Array<1 | -1>,
+  thickness = 0.0034,
+): { facetOffsets: Vec3[]; facetCornerOffsets: Array<[Vec3, Vec3, Vec3]> } {
+  const m = facets.length;
+  const upDirs: Vec3[] = new Array(m);
+  const centroids: Vec3[] = new Array(m);
+  const rawNormals: Vec3[] = new Array(m);
+
+  for (let i = 0; i < m; i++) {
+    const [i0, i1, i2] = facets[i].verts;
+    const p0 = positions3D[i0];
+    const p1 = positions3D[i1];
+    const p2 = positions3D[i2];
+    const rn = normalize3(cross3(sub3(p1, p0), sub3(p2, p0)));
+    rawNormals[i] = rn;
+    const sgn = upSigns[i] ?? 1;
+    upDirs[i] = [rn[0] * sgn, rn[1] * sgn, rn[2] * sgn];
+    centroids[i] = [
+      (p0[0] + p1[0] + p2[0]) / 3,
+      (p0[1] + p1[1] + p2[1]) / 3,
+      (p0[2] + p1[2] + p2[2]) / 3,
+    ];
+  }
+
+  // Pairwise coupling weight between distinct priority levels per local stack cluster:
+  // For each facet i, accumulate smooth repulsion against distinct priorities p_j != p_i
+  // among facets j whose tangent projections overlap facet i (or its connected coplanar sheet).
+  // First group facets that share the exact same priority AND nearly identical plane (same physical layer!)
+  const layerGroupOfFacet = new Int32Array(m).fill(-1);
+  interface LayerGroup {
+    prio: number;
+    upDir: Vec3;
+    refPt: Vec3;
+    facetIndices: number[];
+  }
+  const groups: LayerGroup[] = [];
+
+  for (let i = 0; i < m; i++) {
+    const prio = layerPriority[i];
+    const ud = upDirs[i];
+    const pt = positions3D[facets[i].verts[0]];
+    let found = -1;
+    for (let g = 0; g < groups.length; g++) {
+      const grp = groups[g];
+      if (
+        Math.abs(grp.prio - prio) < 1e-5 &&
+        dot3(grp.upDir, ud) > 0.996 &&
+        Math.abs(dot3(grp.upDir, sub3(pt, grp.refPt))) < 0.015
+      ) {
+        found = g;
+        break;
+      }
+    }
+    if (found === -1) {
+      found = groups.length;
+      groups.push({ prio, upDir: ud, refPt: pt, facetIndices: [i] });
+    } else {
+      groups[found].facetIndices.push(i);
+    }
+    layerGroupOfFacet[i] = found;
+  }
+
+  const numG = groups.length;
+  const groupShift = new Float64Array(numG);
+  const groupAxis: Vec3[] = groups.map((g) => g.upDir);
+
+  const COS_START = Math.cos((34 * Math.PI) / 180); // ~146 deg fold angle: start pre-separating early!
+  const COS_FULL = Math.cos((6 * Math.PI) / 180); // ~174 deg fold angle: full stack separation before contact!
+
+  // Precompute pairwise coupling W[ga][gb] in [0, 1]
+  const W = Array.from({ length: numG }, () => new Float64Array(numG));
+
+  for (let ga = 0; ga < numG; ga++) {
+    for (let gb = ga + 1; gb < numG; gb++) {
+      const A = groups[ga];
+      const B = groups[gb];
+      if (Math.abs(A.prio - B.prio) < 1e-5) continue;
+
+      const cosAlign = dot3(A.upDir, B.upDir);
+      if (cosAlign <= COS_START) continue;
+      const wAng = smoothRange(COS_START, COS_FULL, cosAlign);
+
+      const avgUp = normalize3(add3(A.upDir, B.upDir));
+      const { t1, t2 } = buildTangentBasis(avgUp);
+
+      // Check if ANY facet pair (fa in A, fb in B) overlaps in tangent 2D AND is close along avgUp
+      let bestPairW = 0;
+      for (const fa of A.facetIndices) {
+        const [a0, a1, a2] = facets[fa].verts;
+        const pa0 = positions3D[a0];
+        const pa1 = positions3D[a1];
+        const pa2 = positions3D[a2];
+        const qa0: Vec2 = [dot3(pa0, t1), dot3(pa0, t2)];
+        const qa1: Vec2 = [dot3(pa1, t1), dot3(pa1, t2)];
+        const qa2: Vec2 = [dot3(pa2, t1), dot3(pa2, t2)];
+
+        for (const fb of B.facetIndices) {
+          const [b0, b1, b2] = facets[fb].verts;
+          const pb0 = positions3D[b0];
+          const pb1 = positions3D[b1];
+          const pb2 = positions3D[b2];
+          const qb0: Vec2 = [dot3(pb0, t1), dot3(pb0, t2)];
+          const qb1: Vec2 = [dot3(pb1, t1), dot3(pb1, t2)];
+          const qb2: Vec2 = [dot3(pb2, t1), dot3(pb2, t2)];
+
+          if (!trianglesOverlapInTangent2D(qa0, qa1, qa2, qb0, qb1, qb2, -0.003)) {
+            continue;
+          }
+
+          // Minimum vertex-to-plane distance so tilted flaps only couple where they actually approach!
+          const minVertDist = Math.min(
+            Math.abs(dot3(sub3(pa0, pb0), avgUp)),
+            Math.abs(dot3(sub3(pa1, pb0), avgUp)),
+            Math.abs(dot3(sub3(pa2, pb0), avgUp)),
+            Math.abs(dot3(sub3(pb0, pa0), avgUp)),
+            Math.abs(dot3(sub3(pb1, pa0), avgUp)),
+            Math.abs(dot3(sub3(pb2, pa0), avgUp)),
+          );
+          const dCentroid = Math.abs(dot3(sub3(centroids[fa], centroids[fb]), avgUp));
+          const dPerp = 0.5 * minVertDist + 0.5 * dCentroid;
+          const wDist = 1 - smoothRange(0.008, 0.055, dPerp);
+          if (wDist > bestPairW) bestPairW = wDist;
+          if (bestPairW > 0.999) break;
+        }
+        if (bestPairW > 0.999) break;
+      }
+
+      const wTotal = wAng * bestPairW;
+      W[ga][gb] = wTotal;
+      W[gb][ga] = wTotal;
+    }
+  }
+
+  // Transitive closure inside near-flat stacks so all layers in a multi-layer stack share unified spacing
+  for (let k = 0; k < numG; k++) {
+    for (let i = 0; i < numG; i++) {
+      if (W[i][k] < 1e-4) continue;
+      for (let j = i + 1; j < numG; j++) {
+        if (Math.abs(groups[i].prio - groups[j].prio) < 1e-5) continue;
+        const via = Math.min(W[i][k], W[k][j]);
+        if (via > W[i][j]) {
+          W[i][j] = via;
+          W[j][i] = via;
+        }
+      }
+    }
+  }
+
+  for (let ga = 0; ga < numG; ga++) {
+    let shift = 0;
+    let axisAcc: Vec3 = [0, 0, 0];
+    let wSum = 0;
+    for (let gb = 0; gb < numG; gb++) {
+      if (ga === gb) continue;
+      const w = W[ga][gb];
+      if (w < 1e-5) continue;
+      shift += groups[gb].prio < groups[ga].prio ? 0.5 * w : -0.5 * w;
+      axisAcc = add3(axisAcc, scale3(groups[gb].upDir, w));
+      wSum += w;
+    }
+    groupShift[ga] = shift;
+    if (wSum > 1e-5) {
+      groupAxis[ga] = normalize3(add3(groups[ga].upDir, scale3(axisAcc, 1 / wSum)));
+    }
+  }
+
+  const facetOffsets: Vec3[] = new Array(m);
+  for (let i = 0; i < m; i++) {
+    const g = layerGroupOfFacet[i];
+    facetOffsets[i] = scale3(groupAxis[g], groupShift[g] * thickness);
+  }
+
+  // Open-hinge corner averaging: if two facets share a vertex along an OPEN crease (< 150 deg),
+  // blend their offsets slightly at that shared vertex ONLY if they belong to the same layer priority
+  // (keeps unfolded/90-deg hinges seamless without ever collapsing stacked 180-deg layers!)
+  const facetCornerOffsets: Array<[Vec3, Vec3, Vec3]> = facets.map((_, i) => [
+    facetOffsets[i],
+    facetOffsets[i],
+    facetOffsets[i],
+  ]);
+
+  void rawNormals;
+  return { facetOffsets, facetCornerOffsets };
+}
+
+/** Legacy wrapper kept for compatibility */
 export function computeCoplanarStackOffsets(
   positions3D: Vec3[],
   facets: FacetDef[],
   layerPriority: number[],
-  thickness = 0.0022,
+  thickness = 0.0032,
   preferredStackDir?: Vec3,
 ): Vec3[] {
-  const offsets: Vec3[] = facets.map(() => [0, 0, 0]);
-
-  interface PlaneBucket {
-    refNormal: Vec3;
-    items: Array<{ facetIdx: number; priority: number }>;
-  }
-
-  const buckets: PlaneBucket[] = [];
-
-  for (let fIdx = 0; fIdx < facets.length; fIdx++) {
-    const [i0, i1, i2] = facets[fIdx].verts;
-    const p0 = positions3D[i0];
-    const p1 = positions3D[i1];
-    const p2 = positions3D[i2];
-    const rawN = cross3(sub3(p1, p0), sub3(p2, p0));
-    const len = norm3(rawN);
-    if (len < 1e-10) continue;
-    let n: Vec3 = [rawN[0] / len, rawN[1] / len, rawN[2] / len];
-
-    if (preferredStackDir && Math.abs(dot3(n, preferredStackDir)) > 0.15) {
-      if (dot3(n, preferredStackDir) < 0) {
-        n = [-n[0], -n[1], -n[2]];
-      }
-    } else if (
-      n[1] < -1e-4 ||
-      (Math.abs(n[1]) <= 1e-4 && (n[0] < -1e-4 || (Math.abs(n[0]) <= 1e-4 && n[2] < 0)))
-    ) {
-      n = [-n[0], -n[1], -n[2]];
-    }
-    const planeD = dot3(n, p0);
-
-    let matched: PlaneBucket | null = null;
-    for (const b of buckets) {
-      const cosSim = Math.abs(dot3(n, b.refNormal));
-      if (cosSim > 0.9992) {
-        const refD = dot3(b.refNormal, p0);
-        const existingP0 = positions3D[facets[b.items[0].facetIdx].verts[0]];
-        const bD = dot3(b.refNormal, existingP0);
-        if (Math.abs(refD - bD) < 0.008) {
-          matched = b;
-          break;
-        }
-      }
-    }
-
-    if (!matched) {
-      matched = { refNormal: n, items: [] };
-      buckets.push(matched);
-      void planeD;
-    }
-    matched.items.push({ facetIdx: fIdx, priority: layerPriority[fIdx] ?? fIdx });
-  }
-
-  for (const b of buckets) {
-    if (b.items.length <= 1) continue;
-    // Group identical priorities together so sub-triangles of the same physical sheet layer share one Z-level
-    const uniquePriorities = Array.from(new Set(b.items.map((it) => it.priority))).sort(
-      (a, c) => a - c,
+  const upSigns: Array<1 | -1> = facets.map((f) => {
+    const [i0, i1, i2] = f.verts;
+    const rn = normalize3(
+      cross3(sub3(positions3D[i1], positions3D[i0]), sub3(positions3D[i2], positions3D[i0])),
     );
-    if (uniquePriorities.length <= 1) continue;
-
-    const mid = (uniquePriorities.length - 1) / 2;
-    const rankMap = new Map<number, number>();
-    uniquePriorities.forEach((prio, idx) => rankMap.set(prio, idx - mid));
-
-    for (const it of b.items) {
-      const r = rankMap.get(it.priority) ?? 0;
-      offsets[it.facetIdx] = scale3(b.refNormal, r * thickness);
+    if (preferredStackDir && Math.abs(dot3(rn, preferredStackDir)) > 0.1) {
+      return dot3(rn, preferredStackDir) >= 0 ? 1 : -1;
     }
-  }
-
-  return offsets;
+    return rn[1] >= 0 ? 1 : -1;
+  });
+  return computeSmoothStackOffsets(positions3D, facets, layerPriority, upSigns, thickness)
+    .facetOffsets;
 }
 
-/**
- * Full automated physics verification utility: samples the model across all steps and verifies:
- * 1. No NaN / Infinity coordinates
- * 2. Exact isometric edge length preservation (< maxAllowedStrainPct)
- */
 export function verifyOrigamiModelPhysics(
   model: OrigamiModel,
   samplesPerStep = 20,

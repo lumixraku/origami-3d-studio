@@ -8,19 +8,21 @@ import {
   type OrigamiStepSpec,
   type Vec2,
   type Vec3,
-  computeCoplanarStackOffsets,
+  add3,
   computeMaxEdgeStrainPct,
+  computeSmoothStackOffsets,
   dot3,
   normalize3,
   normalizeFacetWinding,
   rotatePointAroundAxis,
   smooth01,
+  smoothRange,
   sub3,
 } from '../engine/origamiEngine.ts';
 
 const DEG = Math.PI / 180;
 const HALF_W = 1.0;
-const HALF_L = Math.SQRT2; // A4 exact aspect ratio 1 : sqrt(2)
+const HALF_L = Math.SQRT2;
 
 interface RawStepOp {
   id: string;
@@ -28,7 +30,6 @@ interface RawStepOp {
   axisStart: Vec3;
   axisEnd: Vec3;
   movingSideNormal: Vec3;
-  /** Exact mathematical target angle (e.g. +-180 deg, +-90 deg) so polygon splitting is 100% exact */
   exactAngle: number;
   flatFilter?: (flatCentroid: Vec2) => boolean;
   angleCurve?: (t: number) => number;
@@ -47,7 +48,6 @@ interface RawStepSpec {
 interface Poly2D3D {
   vIds: number[];
   flatCentroid: Vec2;
-  layerPrio: number;
 }
 
 const EPS = 1e-6;
@@ -75,7 +75,6 @@ function compileExactHingeModel(
     {
       vIds: [0, 1, 2, 3],
       flatCentroid: [0, 0],
-      layerPrio: 10,
     },
   ];
 
@@ -84,6 +83,7 @@ function compileExactHingeModel(
     axisVA: number;
     axisVB: number;
     movingVerts: number[];
+    movingFacets: number[];
     creaseIds: string[];
   }
 
@@ -115,8 +115,6 @@ function compileExactHingeModel(
     return [su / ids.length, sv / ids.length];
   };
 
-  let prioCounter = 20;
-
   for (let sIdx = 0; sIdx < rawSteps.length; sIdx++) {
     const rStep = rawSteps[sIdx];
     const cOps: CompiledOp[] = [];
@@ -124,7 +122,6 @@ function compileExactHingeModel(
     for (const op of rStep.ops) {
       const normal = normalize3(op.movingSideNormal);
       const nextPolys: Poly2D3D[] = [];
-      const movingPolys: Poly2D3D[] = [];
       const opCreaseIds: string[] = [];
 
       for (const poly of polygons) {
@@ -138,25 +135,11 @@ function compileExactHingeModel(
         const hasFront = dists.some((d) => d > EPS);
         const hasBack = dists.some((d) => d < -EPS);
 
-        if (!hasFront && !hasBack) {
-          nextPolys.push(poly);
-          continue;
-        }
-        if (hasFront && !hasBack) {
-          const movedPoly: Poly2D3D = {
-            ...poly,
-            layerPrio: prioCounter++,
-          };
-          nextPolys.push(movedPoly);
-          movingPolys.push(movedPoly);
-          continue;
-        }
-        if (!hasFront && hasBack) {
+        if (!hasFront || !hasBack) {
           nextPolys.push(poly);
           continue;
         }
 
-        // Split straddling polygon cleanly in exact 3D & 2D
         const frontIds: number[] = [];
         const backIds: number[] = [];
         const onPlaneVerts: number[] = [];
@@ -206,33 +189,20 @@ function compileExactHingeModel(
         }
 
         if (frontIds.length >= 3) {
-          const fp: Poly2D3D = {
+          nextPolys.push({
             vIds: frontIds,
             flatCentroid: computeCentroid2D(frontIds),
-            layerPrio: prioCounter++,
-          };
-          nextPolys.push(fp);
-          movingPolys.push(fp);
+          });
         }
         if (backIds.length >= 3) {
           nextPolys.push({
             vIds: backIds,
             flatCentroid: computeCentroid2D(backIds),
-            layerPrio: poly.layerPrio,
           });
         }
       }
 
       polygons = nextPolys;
-
-      // Collect moving vertex IDs strictly off the hinge plane
-      const movingSet = new Set<number>();
-      for (const mp of movingPolys) {
-        for (const vid of mp.vIds) {
-          const d = dot3(sub3(currentPos[vid], op.axisStart), normal);
-          if (d > EPS) movingSet.add(vid);
-        }
-      }
 
       // Anchor axis to two farthest mesh vertices lying right on the hinge line
       const axisDir = normalize3(sub3(op.axisEnd, op.axisStart));
@@ -266,15 +236,31 @@ function compileExactHingeModel(
         }
       }
 
-      const movingVerts = Array.from(movingSet);
-
-      // Advance currentPos to t = 1 using EXACT angle
+      // Temporary advance for next step's polygon splitting
       const endMult = op.angleCurve ? op.angleCurve(1) : 1;
       const finalAngle = op.exactAngle * endMult;
       if (Math.abs(finalAngle) > 1e-9 && axisVA !== -1 && axisVB !== -1) {
         const orig = currentPos[axisVA];
         const uDir = normalize3(sub3(currentPos[axisVB], orig));
-        for (const vid of movingVerts) {
+        const mVerts = new Set<number>();
+        for (const p of polygons) {
+          if (op.flatFilter && !op.flatFilter(p.flatCentroid)) continue;
+          let cx = 0;
+          let cy = 0;
+          let cz = 0;
+          for (const vid of p.vIds) {
+            cx += currentPos[vid][0];
+            cy += currentPos[vid][1];
+            cz += currentPos[vid][2];
+          }
+          const n = p.vIds.length;
+          if (dot3(sub3([cx / n, cy / n, cz / n], op.axisStart), normal) > EPS) {
+            for (const vid of p.vIds) {
+              if (dot3(sub3(currentPos[vid], op.axisStart), normal) > EPS) mVerts.add(vid);
+            }
+          }
+        }
+        for (const vid of mVerts) {
           currentPos[vid] = rotatePointAroundAxis(currentPos[vid], orig, uDir, finalAngle);
         }
       }
@@ -283,7 +269,8 @@ function compileExactHingeModel(
         op,
         axisVA,
         axisVB,
-        movingVerts,
+        movingVerts: [],
+        movingFacets: [],
         creaseIds: opCreaseIds,
       });
     }
@@ -291,34 +278,55 @@ function compileExactHingeModel(
     compiledSteps.push({ raw: rStep, ops: cOps });
   }
 
-  // Second pass over finalized polygons & vertices2D so vertices created in later
-  // steps are included in earlier steps' movingVerts sets with 100% accuracy!
+  // Triangulate convex polygons into FacetDefs + record each facet's 2D centroid
+  const rawFacets: FacetDef[] = [];
+  const facetCentroids2D: Vec2[] = [];
+  for (let pIdx = 0; pIdx < polygons.length; pIdx++) {
+    const poly = polygons[pIdx];
+    const ids = poly.vIds;
+    for (let k = 1; k < ids.length - 1; k++) {
+      const a = ids[0];
+      const b = ids[k];
+      const c = ids[k + 1];
+      rawFacets.push({
+        id: `plane_f_${pIdx}_${k}`,
+        verts: [a, b, c],
+      });
+      facetCentroids2D.push([
+        (vertices2D[a][0] + vertices2D[b][0] + vertices2D[c][0]) / 3,
+        (vertices2D[a][1] + vertices2D[b][1] + vertices2D[c][1]) / 3,
+      ]);
+    }
+  }
+
+  const facets = normalizeFacetWinding(vertices2D, rawFacets);
+
+  // Second pass over finalized facets & vertices2D to bind exact movingVerts and movingFacets!
   const replayPos: Vec3[] = vertices2D.map(([u, v]) => [u, 0, v]);
   for (const cStep of compiledSteps) {
     for (const cop of cStep.ops) {
       const normal = normalize3(cop.op.movingSideNormal);
-      const mSet = new Set<number>();
-      for (const poly of polygons) {
-        if (cop.op.flatFilter && !cop.op.flatFilter(poly.flatCentroid)) continue;
-        let cx = 0;
-        let cy = 0;
-        let cz = 0;
-        for (const vid of poly.vIds) {
-          cx += replayPos[vid][0];
-          cy += replayPos[vid][1];
-          cz += replayPos[vid][2];
-        }
-        const n = poly.vIds.length;
-        const cDist = dot3(sub3([cx / n, cy / n, cz / n], cop.op.axisStart), normal);
-        if (cDist > EPS) {
-          for (const vid of poly.vIds) {
+      const mVerts = new Set<number>();
+      const mFacets: number[] = [];
+
+      for (let fIdx = 0; fIdx < facets.length; fIdx++) {
+        if (cop.op.flatFilter && !cop.op.flatFilter(facetCentroids2D[fIdx])) continue;
+        const [i0, i1, i2] = facets[fIdx].verts;
+        const cx = (replayPos[i0][0] + replayPos[i1][0] + replayPos[i2][0]) / 3;
+        const cy = (replayPos[i0][1] + replayPos[i1][1] + replayPos[i2][1]) / 3;
+        const cz = (replayPos[i0][2] + replayPos[i1][2] + replayPos[i2][2]) / 3;
+        if (dot3(sub3([cx, cy, cz], cop.op.axisStart), normal) > EPS) {
+          mFacets.push(fIdx);
+          for (const vid of [i0, i1, i2]) {
             if (dot3(sub3(replayPos[vid], cop.op.axisStart), normal) > EPS) {
-              mSet.add(vid);
+              mVerts.add(vid);
             }
           }
         }
       }
-      cop.movingVerts = Array.from(mSet);
+
+      cop.movingVerts = Array.from(mVerts);
+      cop.movingFacets = mFacets;
 
       const endMult = cop.op.angleCurve ? cop.op.angleCurve(1) : 1;
       const finalAngle = cop.op.exactAngle * endMult;
@@ -331,23 +339,6 @@ function compileExactHingeModel(
       }
     }
   }
-
-  // Triangulate convex polygons into FacetDefs + preserve layer priorities
-  const rawFacets: FacetDef[] = [];
-  const facetPrios: number[] = [];
-  for (let pIdx = 0; pIdx < polygons.length; pIdx++) {
-    const poly = polygons[pIdx];
-    const ids = poly.vIds;
-    for (let k = 1; k < ids.length - 1; k++) {
-      rawFacets.push({
-        id: `plane_f_${pIdx}_${k}`,
-        verts: [ids[0], ids[k], ids[k + 1]],
-      });
-      facetPrios.push(poly.layerPrio);
-    }
-  }
-
-  const facets = normalizeFacetWinding(vertices2D, rawFacets);
 
   const steps: OrigamiStepSpec[] = compiledSteps.map((cs) => ({
     id: cs.raw.id,
@@ -369,12 +360,20 @@ function compileExactHingeModel(
 
     const workPos: Vec3[] = vertices2D.map(([u, v]) => [u, 0, v]);
 
+    // Dynamic Step-Matched Layer Rank & Intrinsic Normal Sign!
+    // Uncreased regions ALWAYS share identical rank=0 until the exact step they fold!
+    const ranks = new Float64Array(facets.length).fill(0);
+    const upSigns: Array<1 | -1> = new Array(facets.length).fill(1);
+
     for (let sIdx = 0; sIdx <= activeStepIndex; sIdx++) {
-      const localT = sIdx < activeStepIndex ? 1 : smooth01(stepT);
+      const isCompleted = sIdx < activeStepIndex;
+      const localT = isCompleted ? 1 : smooth01(stepT);
+
       for (const cop of compiledSteps[sIdx].ops) {
         if (cop.axisVA === -1 || cop.axisVB === -1) continue;
         const mult = cop.op.angleCurve ? cop.op.angleCurve(localT) : localT;
         const ang = cop.op.exactAngle * mult;
+
         if (Math.abs(ang) > 1e-10) {
           const orig = workPos[cop.axisVA];
           const uDir = normalize3(sub3(workPos[cop.axisVB], orig));
@@ -382,22 +381,78 @@ function compileExactHingeModel(
             workPos[vid] = rotatePointAroundAxis(workPos[vid], orig, uDir, ang);
           }
         }
+
+        // Apply exact Fold-Reflection Stack Law ONLY for ~180-deg folds that actually fold onto base!
+        const is180Fold = Math.abs(cop.op.exactAngle) > 150 * DEG;
+        const staysFolded = !cop.op.angleCurve || !isCompleted;
+        if (is180Fold && staysFolded && Math.abs(ang) > 90 * DEG) {
+          const movingSet = new Set(cop.movingFacets);
+          // Find max stationary rank on the same side (left vs right half)
+          let maxStatRank = 0;
+          for (let f = 0; f < facets.length; f++) {
+            if (movingSet.has(f)) continue;
+            if (cop.op.flatFilter && !cop.op.flatFilter(facetCentroids2D[f])) continue;
+            if (ranks[f] > maxStatRank) maxStatRank = ranks[f];
+          }
+          for (const f of cop.movingFacets) {
+            ranks[f] = 2 * maxStatRank + 1 - ranks[f];
+            upSigns[f] = (upSigns[f] === 1 ? -1 : 1) as 1 | -1;
+          }
+        }
       }
     }
 
+    // Compute fuselage closure blend (Step 4 -> 7) to keep Left (u < 0) and Right (u > 0)
+    // center keel stacks cleanly separated across X = 0 without interpenetration
+    const fuselageClose =
+      activeStepIndex > 3
+        ? 1
+        : activeStepIndex === 3
+          ? smoothRange(0.65, 1.0, smooth01(stepT))
+          : 0;
+
     // Step 7 flight display elevation blend
     const liftBlend = smooth01(clamped - 6);
+    let keelAxis: Vec3 = [1, 0, 0];
     if (liftBlend > 1e-9) {
       const pitch = -6 * DEG * liftBlend;
+      keelAxis = rotatePointAroundAxis(keelAxis, [0, 0, 0], [1, 0, 0], pitch);
       for (let i = 0; i < workPos.length; i++) {
         const rotated = rotatePointAroundAxis(workPos[i], [0, 0, 0], [1, 0, 0], pitch);
         workPos[i] = [rotated[0], rotated[1] + 0.18 * liftBlend, rotated[2]];
       }
     }
 
+    const { facetOffsets, facetCornerOffsets } = computeSmoothStackOffsets(
+      workPos,
+      facets,
+      Array.from(ranks),
+      upSigns,
+      0.0034,
+    );
+
+    if (fuselageClose > 1e-5) {
+      const keelGap = 0.0068 * fuselageClose;
+      for (let f = 0; f < facets.length; f++) {
+        const sideSign = facetCentroids2D[f][0] >= 0 ? 1 : -1;
+        const shift: Vec3 = [
+          keelAxis[0] * sideSign * keelGap,
+          keelAxis[1] * sideSign * keelGap,
+          keelAxis[2] * sideSign * keelGap,
+        ];
+        facetOffsets[f] = add3(facetOffsets[f], shift);
+        facetCornerOffsets[f] = [
+          add3(facetCornerOffsets[f][0], shift),
+          add3(facetCornerOffsets[f][1], shift),
+          add3(facetCornerOffsets[f][2], shift),
+        ];
+      }
+    }
+
     return {
       vertexPositions: workPos,
-      facetOffsets: computeCoplanarStackOffsets(workPos, facets, facetPrios, 0.0022),
+      facetOffsets,
+      facetCornerOffsets,
       activeStepIndex,
       stepProgress: stepT,
       maxEdgeStrainPct: computeMaxEdgeStrainPct(vertices2D, facets, workPos),
@@ -420,7 +475,7 @@ function compileExactHingeModel(
 }
 
 // ============================================================================
-// 7-Step Classic A4 Dart Paper Airplane Specification (Exact 180° / 90° Hinges)
+// 7-Step Classic A4 Dart Paper Airplane Specification
 // ============================================================================
 
 const RAW_AIRPLANE_STEPS: RawStepSpec[] = [
@@ -429,7 +484,7 @@ const RAW_AIRPLANE_STEPS: RawStepSpec[] = [
     title: '纵向中线对折预折',
     subtitle: 'Step 1 / 7 · 压出居中对称基准线',
     instruction: '将 A4 比例长方形纸张沿纵向中心线对折压实，再平缓展开，留出精准的左右对称中线。',
-    tip: '白面朝上开始向内折角，最终合拢机身展开机翼时，流线型彩面会完整朝外。',
+    tip: '对折再展开后，整张纸恢复平整，不会残留多余断层。',
     recommendedView: 'iso',
     ops: [
       {
@@ -458,6 +513,7 @@ const RAW_AIRPLANE_STEPS: RawStepSpec[] = [
         axisEnd: [HALF_W, 0, -HALF_L + HALF_W],
         movingSideNormal: [1, 0, -1],
         exactAngle: 180 * DEG,
+        flatFilter: (c) => c[0] > 0,
       },
       {
         id: 'p2-left',
@@ -466,6 +522,7 @@ const RAW_AIRPLANE_STEPS: RawStepSpec[] = [
         axisEnd: [-HALF_W, 0, -HALF_L + HALF_W],
         movingSideNormal: [-1, 0, -1],
         exactAngle: -180 * DEG,
+        flatFilter: (c) => c[0] < 0,
       },
     ],
   },
@@ -474,7 +531,7 @@ const RAW_AIRPLANE_STEPS: RawStepSpec[] = [
     title: '斜边二次向中线内折',
     subtitle: 'Step 3 / 7 · 收窄流线型尖机头',
     instruction: '将左右两条 45° 斜边再次向中心线翻折 180°，连同内部折角一起收拢成 22.5° 修长机头。',
-    tip: '开启「X-Ray 透视」可以看到下层三角形是如何精确沿反射折痕同步翻折的。',
+    tip: '开启「X-Ray 透视」可以看到双层折包在翻转过程中保持严格层序，无穿插闪烁。',
     recommendedView: 'iso',
     ops: [
       {
@@ -502,7 +559,7 @@ const RAW_AIRPLANE_STEPS: RawStepSpec[] = [
     title: '沿中心线合拢立起机身',
     subtitle: 'Step 4 / 7 · 形成纸飞机中央龙骨',
     instruction: '沿纵向中线将左右两半向上对折合拢至垂直 90°，形成扎实对称的纸飞机握持龙骨。',
-    tip: '切换至「正面」或「侧面」机位，可以观察机头处多层纸片的严密叠放结构。',
+    tip: '切换至「正面」或「侧面」机位，可以清晰看到中央龙骨左右多层纸片的平行分层结构。',
     recommendedView: 'front',
     ops: [
       {

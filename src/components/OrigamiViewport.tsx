@@ -153,7 +153,6 @@ export const OrigamiViewport: React.FC<OrigamiViewportProps> = ({
     const renderer = new THREE.WebGLRenderer({
       antialias: true,
       alpha: false,
-      logarithmicDepthBuffer: true,
     });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(initW, initH);
@@ -165,10 +164,10 @@ export const OrigamiViewport: React.FC<OrigamiViewportProps> = ({
     const scene = new THREE.Scene();
     scene.background = new THREE.Color('#0f172a');
 
-    const camera = new THREE.PerspectiveCamera(40, initW / initH, 0.05, 80);
+    const camera = new THREE.PerspectiveCamera(40, initW / initH, 0.22, 24);
     camera.position.set(...CAMERA_PRESETS.iso.pos);
 
-    const pipCamera = new THREE.PerspectiveCamera(40, 1.38, 0.05, 80);
+    const pipCamera = new THREE.PerspectiveCamera(40, 1.38, 0.22, 24);
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
@@ -246,6 +245,9 @@ export const OrigamiViewport: React.FC<OrigamiViewportProps> = ({
       roughness: 0.74,
       metalness: 0.02,
       side: THREE.FrontSide,
+      polygonOffset: true,
+      polygonOffsetFactor: 1,
+      polygonOffsetUnits: 1,
     });
 
     const backMat = new THREE.MeshStandardMaterial({
@@ -253,6 +255,9 @@ export const OrigamiViewport: React.FC<OrigamiViewportProps> = ({
       roughness: 0.74,
       metalness: 0.02,
       side: THREE.BackSide,
+      polygonOffset: true,
+      polygonOffsetFactor: 1,
+      polygonOffsetUnits: 1,
     });
 
     const frontMesh = new THREE.Mesh(geometry, frontMat);
